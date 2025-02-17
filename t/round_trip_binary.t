@@ -30,26 +30,30 @@ subtest 'Mac::PropertyList' => sub {
 };
 
 subtest 'plutil' => sub {
-    plan skip_all => 'Test requires plutil' unless $HAS_PLUTIL;
-
     my( $temp_fh, $temp_filename ) = tempfile();
+    plan skip_all => 'Test requires plutil'
+        unless my $util = plutil->new( $temp_filename );
+
     binmode $temp_fh;
     print { $temp_fh } $BINARY_PLIST;
 
-    is_deeply(
-        parse_plist( slurp_plutil($temp_filename) ),
-        $ORIGINAL_PLIST,
-        'Round-trip via Mac::PropertyList and plutil' );
-
+    SKIP: {
+        is_deeply(
+            parse_plist( $util->slurp(binary => 0) ),
+            $ORIGINAL_PLIST,
+            'Read binary plist converted to xml by plutil' );
+    }
 
     seek $temp_fh, 0, 0;
     binmode $temp_fh, ':encoding(utf-8)';
     print { $temp_fh } plist_as_string( $ORIGINAL_PLIST );
 
-    is_deeply(
-        parse_plist( slurp_plutil($temp_filename) ),
-        $ORIGINAL_PLIST,
-        'Round-trip via plutil and Mac::PropertyList' );
+    SKIP: {
+        is_deeply(
+            parse_plist( $util->slurp(binary => 1) ),
+            $ORIGINAL_PLIST,
+            'Read xml plist converted to binary bu plutil' );
+    }
 
 };
 
@@ -84,18 +88,30 @@ sub create_plist {
     );
 }
 
-sub slurp_plutil {
-    my( $from_filename ) = @_;
-    my $binary = -B $from_filename;
-    my ( $encoding, $format ) = -B $from_filename ? ( qw{raw binary1} )
-    : ( qw{encoding(utf-8) xml1} );
-    my $pipe_fh;
-    open $pipe_fh, "-|:$encoding",
-        qw{plutil -convert}, $format, qw{-o -}, $from_filename
-        or do {
-        my ( undef, $file, $line ) = caller;
-        BAIL_OUT "Failed to pipe from plutil: $! at $file line $line";
-    };
+package plutil;
+
+use Test::More;
+
+sub new {
+    my ($class, $plist_filename) = @_;
+    my $util_path = '/usr/bin/plutil';
+    -x $util_path
+        or return;
+    return bless {
+        plist_filename  => $plist_filename,
+        util_path       => $util_path,
+    }, $class;
+}
+
+sub slurp {
+    my ($self, %arg) = @_;
+    my ($encoding, $format) = $arg{binary} ?
+        ( qw{raw binary1} ) :
+        ( qw{encoding(utf-8) xml1} );
+    open my $pipe_fh, "-|:$encoding",
+        $self->{util_path}, qw{-convert}, $format, qw{-o -},
+        $self->{plist_filename}
+        or skip "Failed to pipe from plutil: $!";
     local $/ = undef;   # slurp mode
     return <$pipe_fh>;
 }
